@@ -1,0 +1,94 @@
+app:
+  jwtSecret: Vm14U1MxWXlSblJVYmxKWFlXdEtWMVJYZEdGTlJtdDNXa1JTYVZGVU1Eaz0=
+  jwtExpirationMs: 3000000
+  jwtRefreshTokenExpiry: 5000000
+
+spring:
+  application:
+    name: api-gateway
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+  gateway:
+    excludedURLsNew: /api/v1/users/authenticate,/api/auth/login,/api/auth/token/refresh
+#  config:
+#    import: optional:configserver:http://localhost:8888/InfoTrends-Cloud-Config-Server/native
+  cloud:
+    netflix:
+      ribbon: true
+    config:
+      profile: native
+    gateway:
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods: "*"
+            allowedHeaders: "*"
+      discovery.locator.enabled: true
+
+    discovery:
+      client:
+#        - id: expense-service
+#          uri: lb://expense-service  # Load balanced URL for microservice1
+#          predicates:
+#            - Path=/api/expenses
+#        - id: authentication-service
+#          uri: lb://authentication-service  # Load balanced URL for microservice1
+#          predicates:
+#            - Path=/api/auth/**
+        simple:
+          instances:
+            auth-service[0]:
+              uri: http://auth-service:8555
+            expense-service[0]:
+              uri: http://expense-service:9000
+            income-service[0]:
+              uri: http://income-service:8082
+            report-service[0]:
+              uri: http://report-service:8083
+
+#        - id: expense-service
+#          uri: lb://expense-service  # Load balanced URL for microservice1
+#          predicates:
+#            - Path=/api/expenses
+#        - id: discovery-service
+#          uri: http://localhost:8761  # Load balanced URL for microservice2
+#          predicates:
+#            - Path=/eureka/web
+#          filters:
+#            - SetPath=/
+#        - id: discovery-server-static
+#          uri: http://localhost:8761
+#          predicates:
+#            - Path=/eureka/**
+
+#  security:
+#    oauth2:
+#      resourceserver:
+
+
+#        jwt:
+#          issuer-uri: http://localhost:8080/realms/spring-boot-microservices-realm
+server:
+  port: 8765
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8761/eureka
+    register-with-eureka: false
+    fetch-registry: false
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+
+logging:
+  level:
+    org.springframework.cloud.loadbalancer: DEBUG
+    com.netflix.eureka: DEBUG
+
