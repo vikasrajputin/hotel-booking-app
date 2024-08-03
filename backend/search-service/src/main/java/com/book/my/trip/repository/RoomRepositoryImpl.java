@@ -1,0 +1,405 @@
+package com.book.my.trip.repository;
+
+
+
+import com.book.my.trip.entity.Booking;
+import com.book.my.trip.entity.RatingComments;
+import com.book.my.trip.entity.Room;
+import com.book.my.trip.status.ReviewTitle;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.criteria.*;
+import org.springframework.stereotype.Repository;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.List;
+
+@Repository
+public class RoomRepositoryImpl implements RoomRepositoryCustom {
+
+
+        @PersistenceContext
+        private EntityManager entityManager;
+
+        @Override
+        public List<Room> findAvailableRooms(String stateLocation, LocalDate dateIn, LocalDate dateOut, int adults, int children, double minPrice, double maxPrice) {
+            CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+            CriteriaQuery<Object[]> query = cb.createQuery(Object[].class);
+            Root<Room> room = query.from(Room.class);
+
+            // Subquery to find rooms that are already booked for the given date range
+            Subquery<Long> subquery = query.subquery(Long.class);
+            Root<Booking> booking = subquery.from(Booking.class);
+            subquery.select(booking.get("room").get("roomId"))
+                    .where(
+                            cb.equal(booking.get("room"), room),
+                            cb.or(
+                                    cb.and(
+                                            cb.lessThan(booking.get("checkInTime"), LocalDateTime.of(dateOut, LocalTime.of(11, 0))),
+                                            cb.greaterThan(booking.get("checkOutTime"), LocalDateTime.of(dateIn, LocalTime.of(11, 0)))
+                                    )
+                            )
+                    );
+
+            // Join with RatingComments to get average rating and rating count
+            Join<Room, RatingComments> ratingComments = room.join("hotel", JoinType.LEFT).join("ratingComments", JoinType.LEFT);
+
+            // Predicates for filtering rooms based on search criteria
+            Predicate stateLocationPredicate = cb.equal(room.get("stateLocation"), stateLocation);
+//            Predicate adultsPredicate = cb.greaterThanOrEqualTo(room.get("adults"), adults);
+//            Predicate childrenPredicate = cb.greaterThanOrEqualTo(room.get("children"), children);
+            Predicate pricePredicate = cb.between(room.get("roomPrice"), minPrice, maxPrice);
+            Predicate availablePredicate = cb.not(cb.exists(subquery));
+
+            query.multiselect(
+                    room,
+                    cb.avg(ratingComments.get("rating")).alias("averageRating"),
+                    cb.count(ratingComments.get("rating")).alias("ratingCount")
+            ).where(
+                    stateLocationPredicate,
+//                    adultsPredicate,
+//                    childrenPredicate,
+                    pricePredicate,
+                    availablePredicate
+            ).groupBy(room.get("roomId"));
+
+            List<Object[]> results = entityManager.createQuery(query).getResultList();
+
+            List<Room> rooms = new ArrayList<>();
+            for (Object[] result : results) {
+                Room r = (Room) result[0];
+                Double avgRating = (Double) result[1];
+                Long count = (Long) result[2];
+
+                if (avgRating != null) {
+                    avgRating = Math.round(avgRating * 10.0) / 10.0;
+                }
+
+                if (avgRating != null) {
+                    if (avgRating >= 4.2 && avgRating <= 5.0) {
+                        r.setReviewTitle(ReviewTitle.EXCELLENT);
+                    } else if (avgRating >= 3.5 && avgRating < 4.2) {
+                        r.setReviewTitle(ReviewTitle.VERY_GOOD);
+                    } else if (avgRating >= 3.0 && avgRating < 3.5) {
+                        r.setReviewTitle(ReviewTitle.GOOD);
+                    }
+                }
+
+                r.setAverageRating(avgRating);
+                r.setRatingCount(count);
+                rooms.add(r);
+            }
+            return rooms;
+        }
+
+
+    @Override
+    public List<Room> findHotelsByPriceAsc(LocalDate dateIn, LocalDate dateOut, String stateLocation, double minPrice, double maxPrice) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Object[]> query = cb.createQuery(Object[].class);
+        Root<Room> room = query.from(Room.class);
+
+        // Subquery to find rooms that are already booked for the given date range
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<Booking> booking = subquery.from(Booking.class);
+        subquery.select(booking.get("room").get("roomId"))
+                .where(
+                        cb.equal(booking.get("room").get("roomId"), room.get("roomId")),
+                        cb.lessThanOrEqualTo(booking.get("checkIn"), dateOut),
+                        cb.greaterThanOrEqualTo(booking.get("checkOut"), dateIn)
+                );
+
+        // Join with RatingComments to get average rating and rating count
+        Join<Room, RatingComments> ratingComments = room.join("hotel", JoinType.LEFT).join("ratingComments", JoinType.LEFT);
+
+        // Predicates for filtering rooms based on search criteria
+        Predicate stateLocationPredicate = cb.equal(room.get("stateLocation"), stateLocation);
+        Predicate pricePredicate = cb.between(room.get("roomPrice"), minPrice, maxPrice);
+        Predicate availablePredicate = cb.not(cb.exists(subquery));
+
+        query.multiselect(
+                        room,
+                        cb.avg(ratingComments.get("rating")).alias("averageRating"),
+                        cb.count(ratingComments.get("rating")).alias("ratingCount")
+                ).where(
+                        stateLocationPredicate,
+                        pricePredicate,
+                        availablePredicate
+                ).groupBy(room.get("roomId"))
+                .orderBy(cb.asc(room.get("roomPrice")));
+
+        List<Object[]> results = entityManager.createQuery(query).getResultList();
+
+        // Map results to Room entities
+        List<Room> rooms = new ArrayList<>();
+        for (Object[] result : results) {
+            Room r = (Room) result[0];
+            Double avgRating = (Double) result[1];
+            Long count = (Long) result[2];
+
+            if (avgRating != null) {
+                avgRating = Math.round(avgRating * 10.0) / 10.0;
+            }
+
+            if (avgRating != null) {
+                if (avgRating >= 4.2 && avgRating <= 5.0) {
+                    r.setReviewTitle(ReviewTitle.EXCELLENT);
+                } else if (avgRating >= 3.5 && avgRating < 4.2) {
+                    r.setReviewTitle(ReviewTitle.VERY_GOOD);
+                } else if (avgRating >= 3.0 && avgRating < 3.5) {
+                    r.setReviewTitle(ReviewTitle.GOOD);
+                }
+            }
+
+            r.setAverageRating(avgRating);
+            r.setRatingCount(count);
+            rooms.add(r);
+        }
+        return rooms;
+    }
+
+    @Override
+    public List<Room> findHotelsByPriceDesc(LocalDate dateIn, LocalDate dateOut, String stateLocation, double minPrice, double maxPrice) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Object[]> query = cb.createQuery(Object[].class);
+        Root<Room> room = query.from(Room.class);
+
+        // Subquery to find rooms that are already booked for the given date range
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<Booking> booking = subquery.from(Booking.class);
+        subquery.select(booking.get("room").get("roomId"))
+                .where(
+                        cb.equal(booking.get("room").get("roomId"), room.get("roomId")),
+                        cb.lessThanOrEqualTo(booking.get("checkIn"), dateOut),
+                        cb.greaterThanOrEqualTo(booking.get("checkOut"), dateIn)
+                );
+
+        // Join with RatingComments to get average rating and rating count
+        Join<Room, RatingComments> ratingComments = room.join("hotel", JoinType.LEFT).join("ratingComments", JoinType.LEFT);
+
+        // Predicates for filtering rooms based on search criteria
+        Predicate stateLocationPredicate = cb.equal(room.get("stateLocation"), stateLocation);
+        Predicate pricePredicate = cb.between(room.get("roomPrice"), minPrice, maxPrice);
+        Predicate availablePredicate = cb.not(cb.exists(subquery));
+
+        query.multiselect(
+                        room,
+                        cb.avg(ratingComments.get("rating")).alias("averageRating"),
+                        cb.count(ratingComments.get("rating")).alias("ratingCount")
+                ).where(
+                        stateLocationPredicate,
+                        pricePredicate,
+                        availablePredicate
+                ).groupBy(room.get("roomId"))
+                .orderBy(cb.desc(room.get("roomPrice")));
+
+        List<Object[]> results = entityManager.createQuery(query).getResultList();
+
+        // Map results to Room entities
+        List<Room> rooms = new ArrayList<>();
+        for (Object[] result : results) {
+            Room r = (Room) result[0];
+            Double avgRating = (Double) result[1];
+            Long count = (Long) result[2];
+
+            if (avgRating != null) {
+                avgRating = Math.round(avgRating * 10.0) / 10.0;
+            }
+
+            if (avgRating != null) {
+                if (avgRating >= 4.2 && avgRating <= 5.0) {
+                    r.setReviewTitle(ReviewTitle.EXCELLENT);
+                } else if (avgRating >= 3.5 && avgRating < 4.2) {
+                    r.setReviewTitle(ReviewTitle.VERY_GOOD);
+                } else if (avgRating >= 3.0 && avgRating < 3.5) {
+                    r.setReviewTitle(ReviewTitle.GOOD);
+                }
+            }
+
+            r.setAverageRating(avgRating);
+            r.setRatingCount(count);
+            rooms.add(r);
+        }
+        return rooms;
+    }
+
+
+    @Override
+    public List<Room> findRoomsByHighestRating(LocalDate dateIn, LocalDate dateOut, String stateLocation, double minPrice, double maxPrice) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Object[]> query = cb.createQuery(Object[].class);
+        Root<Room> room = query.from(Room.class);
+
+        // Subquery to find rooms that are already booked for the given date range
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<Booking> booking = subquery.from(Booking.class);
+        subquery.select(booking.get("room").get("roomId"))
+                .where(
+                        cb.equal(booking.get("room").get("roomId"), room.get("roomId")),
+                        cb.lessThanOrEqualTo(booking.get("checkIn"), dateOut),
+                        cb.greaterThanOrEqualTo(booking.get("checkOut"), dateIn)
+                );
+
+        // Join with RatingComments to get average rating and rating count
+        Join<Room, RatingComments> ratingComments = room.join("hotel", JoinType.LEFT).join("ratingComments", JoinType.LEFT);
+
+        // Predicates for filtering rooms based on search criteria
+        Predicate stateLocationPredicate = cb.equal(room.get("stateLocation"), stateLocation);
+        Predicate pricePredicate = cb.between(room.get("roomPrice"), minPrice, maxPrice);
+        Predicate availablePredicate = cb.not(cb.exists(subquery));
+
+        query.multiselect(
+                        room,
+                        cb.avg(ratingComments.get("rating")).alias("averageRating"),
+                        cb.count(ratingComments.get("rating")).alias("ratingCount")
+                ).where(
+                        stateLocationPredicate,
+                        pricePredicate,
+                        availablePredicate
+                ).groupBy(room.get("roomId"))
+                .having(cb.isNotNull(cb.avg(ratingComments.get("rating"))))
+                .orderBy(cb.desc(cb.avg(ratingComments.get("rating"))));
+
+        List<Object[]> results = entityManager.createQuery(query).getResultList();
+
+        // Map results to Room entities
+        List<Room> rooms = new ArrayList<>();
+        for (Object[] result : results) {
+            Room r = (Room) result[0];
+            Double avgRating = (Double) result[1];
+            Long count = (Long) result[2];
+
+            if (avgRating != null) {
+                avgRating = Math.round(avgRating * 10.0) / 10.0;
+
+                if (avgRating >= 4.2 && avgRating <= 5.0) {
+                    r.setReviewTitle(ReviewTitle.EXCELLENT);
+                } else if (avgRating >= 3.5 && avgRating < 4.2) {
+                    r.setReviewTitle(ReviewTitle.VERY_GOOD);
+                } else if (avgRating >= 3.0 && avgRating < 3.5) {
+                    r.setReviewTitle(ReviewTitle.GOOD);
+                }
+
+                r.setAverageRating(avgRating);
+                r.setRatingCount(count);
+                rooms.add(r);
+            }
+        }
+        return rooms;
+    }
+
+    @Override
+    public List<Room> findRoomsByHotelNames(List<String> hotelNames, String stateLocation, LocalDate dateIn, LocalDate dateOut, int adults, int children, double minPrice, double maxPrice) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Object[]> query = cb.createQuery(Object[].class);
+        Root<Room> room = query.from(Room.class);
+
+        // Subquery to find rooms that are already booked for the given date range
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<Booking> booking = subquery.from(Booking.class);
+        subquery.select(booking.get("room").get("roomId"))
+                .where(
+                        cb.equal(booking.get("room").get("roomId"), room.get("roomId")),
+                        cb.lessThanOrEqualTo(booking.get("checkIn"), dateOut),
+                        cb.greaterThanOrEqualTo(booking.get("checkOut"), dateIn)
+                );
+
+        // Join with RatingComments to get average rating and rating count
+        Join<Room, RatingComments> ratingComments = room.join("hotel", JoinType.LEFT).join("ratingComments", JoinType.LEFT);
+
+        // Predicates for filtering rooms based on search criteria
+        Predicate hotelNamesPredicate = room.get("hotelName").in(hotelNames);
+        Predicate stateLocationPredicate = cb.equal(room.get("stateLocation"), stateLocation);
+        Predicate pricePredicate = cb.between(room.get("roomPrice"), minPrice, maxPrice);
+        Predicate availablePredicate = cb.not(cb.exists(subquery));
+
+        query.multiselect(
+                room,
+                cb.avg(ratingComments.get("rating")).alias("averageRating"),
+                cb.count(ratingComments.get("rating")).alias("ratingCount")
+        ).where(
+                hotelNamesPredicate,
+                stateLocationPredicate,
+                pricePredicate,
+                availablePredicate
+        ).groupBy(room.get("roomId"));
+
+        List<Object[]> results = entityManager.createQuery(query).getResultList();
+
+        // Map results to Room entities
+        List<Room> rooms = new ArrayList<>();
+        for (Object[] result : results) {
+            Room r = (Room) result[0];
+            Double avgRating = (Double) result[1];
+            Long count = (Long) result[2];
+
+            if (avgRating != null) {
+                avgRating = Math.round(avgRating * 10.0) / 10.0;
+            }
+
+            r.setAverageRating(avgRating);
+            r.setRatingCount(count);
+            rooms.add(r);
+        }
+        return rooms;
+    }
+
+
+    @Override
+    public List<Room> findHotelNamesRooms(List<String> hotelNames, LocalDate dateIn, LocalDate dateOut, int adults, int children) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Object[]> query = cb.createQuery(Object[].class);
+        Root<Room> room = query.from(Room.class);
+
+        // Subquery to find rooms that are already booked for the given date range
+        Subquery<Long> subquery = query.subquery(Long.class);
+        Root<Booking> booking = subquery.from(Booking.class);
+        subquery.select(booking.get("room").get("roomId"))
+                .where(
+                        cb.equal(booking.get("room").get("roomId"), room.get("roomId")),
+                        cb.lessThanOrEqualTo(booking.get("checkIn"), dateOut),
+                        cb.greaterThanOrEqualTo(booking.get("checkOut"), dateIn)
+                );
+
+        // Join with RatingComments to get average rating and rating count
+        Join<Room, RatingComments> ratingComments = room.join("hotel", JoinType.LEFT).join("ratingComments", JoinType.LEFT);
+
+        // Predicates for filtering rooms based on search criteria
+        Predicate hotelNamesPredicate = room.get("hotelName").in(hotelNames);
+        Predicate availablePredicate = cb.not(cb.exists(subquery));
+
+        query.multiselect(
+                room,
+                cb.avg(ratingComments.get("rating")).alias("averageRating"),
+                cb.count(ratingComments.get("rating")).alias("ratingCount")
+        ).where(
+                hotelNamesPredicate,
+                availablePredicate
+        ).groupBy(room.get("roomId"));
+
+        List<Object[]> results = entityManager.createQuery(query).getResultList();
+
+        // Map results to Room entities
+        List<Room> rooms = new ArrayList<>();
+        for (Object[] result : results) {
+            Room r = (Room) result[0];
+            Double avgRating = (Double) result[1];
+            Long count = (Long) result[2];
+
+            if (avgRating != null) {
+                avgRating = Math.round(avgRating * 10.0) / 10.0;
+            }
+
+            r.setAverageRating(avgRating);
+            r.setRatingCount(count);
+            rooms.add(r);
+        }
+        return rooms;
+    }
+
+}
+
+
